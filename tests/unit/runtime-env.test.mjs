@@ -101,3 +101,23 @@ test("spawnWithForwardedSignals forwards process signals and exit status", async
   assert.deepEqual(processExits, [3]);
   assert.deepEqual(processKills, [{ pid: process.pid, signal: "SIGTERM" }]);
 });
+
+test("normalizeNodeEnvForMode drops a non-development NODE_ENV only for next dev", async () => {
+  const runtimeEnv = await loadRuntimeEnv("node-env");
+
+  const dev = runtimeEnv.normalizeNodeEnvForMode({ NODE_ENV: "production", PORT: "1" }, "dev");
+  assert.deepEqual(dev.env, { PORT: "1" });
+  assert.equal(dev.droppedNodeEnv, "production");
+
+  const devOk = runtimeEnv.normalizeNodeEnvForMode({ NODE_ENV: "development" }, "dev");
+  assert.deepEqual(devOk.env, { NODE_ENV: "development" });
+  assert.equal(devOk.droppedNodeEnv, null);
+
+  const devUnset = runtimeEnv.normalizeNodeEnvForMode({ PORT: "1" }, "dev");
+  assert.deepEqual(devUnset.env, { PORT: "1" });
+  assert.equal(devUnset.droppedNodeEnv, null);
+
+  const start = runtimeEnv.normalizeNodeEnvForMode({ NODE_ENV: "production" }, "start");
+  assert.deepEqual(start.env, { NODE_ENV: "production" });
+  assert.equal(start.droppedNodeEnv, null);
+});

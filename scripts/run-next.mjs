@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import {
+  normalizeNodeEnvForMode,
   resolveRuntimePorts,
   withRuntimePortEnv,
   spawnWithForwardedSignals,
@@ -10,7 +11,12 @@ import { bootstrapEnv } from "./bootstrap-env.mjs";
 const mode = process.argv[2] === "start" ? "start" : "dev";
 
 // Load .env / server.env first so PORT / DASHBOARD_PORT from files affect --port below.
-const env = bootstrapEnv();
+const { env, droppedNodeEnv } = normalizeNodeEnvForMode(bootstrapEnv(), mode);
+if (droppedNodeEnv) {
+  console.log(
+    `[run-next] Ignoring NODE_ENV=${droppedNodeEnv} for \`next dev\` (Next.js requires development).`
+  );
+}
 const runtimePorts = resolveRuntimePorts(env);
 const { dashboardPort } = runtimePorts;
 
