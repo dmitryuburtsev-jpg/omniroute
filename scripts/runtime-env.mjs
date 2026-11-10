@@ -29,6 +29,27 @@ export function withRuntimePortEnv(env, runtimePorts) {
   };
 }
 
+/**
+ * `next dev` must run with NODE_ENV=development. A value such as `production`
+ * inherited from `.env` or the shell breaks Next's CSS pipeline (Tailwind's
+ * `@import` fails to parse) and makes every page return 500. In dev mode we
+ * drop any other value so Next sets `development` itself.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @param {"dev" | "start"} mode
+ * @returns {{ env: Record<string, string | undefined>, droppedNodeEnv: string | null }}
+ */
+export function normalizeNodeEnvForMode(env, mode) {
+  const current = env.NODE_ENV;
+  if (mode !== "dev" || !current || current === "development") {
+    return { env, droppedNodeEnv: null };
+  }
+
+  const normalized = { ...env };
+  delete normalized.NODE_ENV;
+  return { env: normalized, droppedNodeEnv: current };
+}
+
 export function sanitizeColorEnv(env = {}) {
   const sanitized = { ...env };
 

@@ -17,8 +17,8 @@
  * Fixes: https://github.com/diegosouzapw/OmniRoute/issues/426
  */
 
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { PUBLISHED_BUILD_ARCH, PUBLISHED_BUILD_PLATFORM } from "./native-binary-compat.mjs";
@@ -26,6 +26,52 @@ import { PUBLISHED_BUILD_ARCH, PUBLISHED_BUILD_PLATFORM } from "./native-binary-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = join(__dirname, "..");
+
+/**
+ * True when `app/` holds the Next.js standalone build shipped in the npm
+ * package. In a source checkout there is no `app/server.js`, and creating
+ * anything under `app/` makes Next.js treat it as the App Router directory
+ * instead of `src/app/`, so every route returns 404.
+ */
+export function isStandaloneAppInstall(root = ROOT) {
+  return existsSync(join(root, "app", "server.js"));
+}
+
+function listDir(dir) {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Removes an `app/` directory that older versions of this script created in a
+ * source checkout (it contains nothing but `node_modules/@swc`). Anything else
+ * under `app/` is left untouched.
+ */
+export function removeStrayAppDir(root = ROOT, logger = console) {
+  if (isStandaloneAppInstall(root)) return false;
+  if (!existsSync(join(root, "src", "app"))) return false;
+
+  const appDir = join(root, "app");
+  const appEntries = listDir(appDir);
+  if (!appEntries || appEntries.length !== 1 || appEntries[0] !== "node_modules") return false;
+
+  const moduleEntries = listDir(join(appDir, "node_modules"));
+  if (!moduleEntries || moduleEntries.some((entry) => entry !== "@swc")) return false;
+
+  try {
+    rmSync(appDir, { recursive: true, force: true });
+    logger.log(
+      "  🧹 Removed stray app/ directory (it shadowed src/app in this source checkout).\n"
+    );
+    return true;
+  } catch (err) {
+    logger.warn(`  ⚠️  Could not remove stray app/ directory: ${err.message}`);
+    return false;
+  }
+}
 
 const appBinary = join(
   ROOT,
@@ -173,9 +219,14 @@ async function fixBetterSqliteBinary() {
   console.warn("");
 }
 
-async function ensureSwcHelpers() {
-  const swcHelpersApp = join(ROOT, "app", "node_modules", "@swc", "helpers");
-  const swcHelpersRoot = join(ROOT, "node_modules", "@swc", "helpers");
+export async function ensureSwcHelpers(root = ROOT, logger = console) {
+  // Only the published standalone build needs @swc/helpers inside app/.
+  if (!isStandaloneAppInstall(root)) {
+    return;
+  }
+
+  const swcHelpersApp = join(root, "app", "node_modules", "@swc", "helpers");
+  const swcHelpersRoot = join(root, "node_modules", "@swc", "helpers");
 
   if (existsSync(swcHelpersApp)) {
     return;
@@ -184,20 +235,20 @@ async function ensureSwcHelpers() {
   if (existsSync(swcHelpersRoot)) {
     try {
       const { cpSync } = await import("node:fs");
-      mkdirSync(join(ROOT, "app", "node_modules", "@swc"), { recursive: true });
+      mkdirSync(join(root, "app", "node_modules", "@swc"), { recursive: true });
       cpSync(swcHelpersRoot, swcHelpersApp, { recursive: true });
-      console.log("  ✅ @swc/helpers copied to standalone app/node_modules.\n");
+      logger.log("  ✅ @swc/helpers copied to standalone app/node_modules.\n");
     } catch (err) {
-      console.warn(`  ⚠️  Could not copy @swc/helpers: ${err.message}`);
-      console.warn(
+      logger.warn(`  ⚠️  Could not copy @swc/helpers: ${err.message}`);
+      logger.warn(
         "     Try manually: cp -r node_modules/@swc/helpers app/node_modules/@swc/helpers\n"
       );
     }
     return;
   }
 
-  console.warn("  ⚠️  @swc/helpers not found in root node_modules either.");
-  console.warn("     Try: npm install --save-exact @swc/helpers@0.5.19\n");
+  logger.warn("  ⚠️  @swc/helpers not found in root node_modules either.");
+  logger.warn("     Try: npm install --save-exact @swc/helpers@0.5.19\n");
 }
 
 async function syncProjectEnv() {
@@ -209,6 +260,21 @@ async function syncProjectEnv() {
   }
 }
 
-await fixBetterSqliteBinary();
-await ensureSwcHelpers();
-await syncProjectEnv();
+// Run only when executed as a script (`node scripts/postinstall.mjs`), not when
+// imported by tests. Compare real paths: Node resolves symlinks for the entry
+// module, so a package installed under a symlinked directory still matches.
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(resolve(process.argv[1])) === realpathSync(__filename);
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectRun()) {
+  removeStrayAppDir();
+  await fixBetterSqliteBinary();
+  await ensureSwcHelpers();
+  await syncProjectEnv();
+}
